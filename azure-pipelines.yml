@@ -1,0 +1,80 @@
+trigger:
+  - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  pythonVersion: '3.11'
+  azureServiceConnection: 'Azure-Flask-Connection'
+  webAppName: 'YOUR-FLASK-APP-NAME'
+
+stages:
+
+# -------------------------
+# BUILD STAGE
+# -------------------------
+
+- stage: Build
+  displayName: Build Flask Application
+
+  jobs:
+  - job: BuildJob
+    steps:
+
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '$(pythonVersion)'
+
+    - script: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        python -c "import app; print('Flask application build successful')"
+      displayName: Install dependencies and validate app
+
+    - task: ArchiveFiles@2
+      displayName: Create deployment ZIP
+      inputs:
+        rootFolderOrFile: '$(System.DefaultWorkingDirectory)'
+        includeRootFolder: false
+        archiveType: zip
+        archiveFile: '$(Build.ArtifactStagingDirectory)/flask-app.zip'
+        replaceExistingArchive: true
+
+    - task: PublishPipelineArtifact@1
+      inputs:
+        targetPath: '$(Build.ArtifactStagingDirectory)/flask-app.zip'
+        artifact: flask-drop
+
+# -------------------------
+# DEPLOY STAGE
+# -------------------------
+
+- stage: Deploy
+  displayName: Deploy to Azure App Service
+  dependsOn: Build
+
+  jobs:
+  - deployment: DeployFlask
+    displayName: Deploy Flask Application
+
+    environment: flask-production
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              artifact: flask-drop
+              path: '$(Pipeline.Workspace)/flask-drop'
+
+          - task: AzureWebApp@1
+            displayName: Deploy to Azure App Service
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              appType: 'webAppLinux'
+              appName: '$(webAppName)'
+              package: '$(Pipeline.Workspace)/flask-drop/flask-app.zip'
+              startUpCommand: 'gunicorn --bind=0.0.0.0 --timeout 600 app:app'
